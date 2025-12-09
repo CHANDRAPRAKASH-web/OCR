@@ -1,0 +1,39 @@
+from PIL import Image, ImageOps, ImageFilter
+import io
+import numpy as np
+import cv2
+
+def preprocess_image(image_bytes, target_dpi=300, enlarge_factor=2.0):
+    pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    w, h = pil.size
+    # upscale to increase effective DPI for tesseract
+    new_w = int(w * enlarge_factor)
+    new_h = int(h * enlarge_factor)
+    pil = pil.resize((new_w, new_h), Image.LANCZOS)
+
+    # convert to grayscale
+    gray = pil.convert("L")
+
+    # apply slight blur to reduce noise then adaptive threshold
+    arr = np.array(gray)
+    arr = cv2.medianBlur(arr, 3)
+    th = cv2.adaptiveThreshold(arr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                               cv2.THRESH_BINARY, 11, 2)
+
+    # optional deskew
+    coords = np.column_stack(np.where(th < 255))
+    if coords.shape[0] > 0:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45:
+            angle = -(90 + angle)
+        else:
+            angle = -angle
+        if abs(angle) > 0.2:
+            M = cv2.getRotationMatrix2D((new_w//2, new_h//2), angle, 1.0)
+            th = cv2.warpAffine(th, M, (new_w, new_h), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
+
+    # convert back to PIL bytes
+    im_pil = Image.fromarray(th)
+    out = io.BytesIO()
+    im_pil.save(out, format="PNG")
+    return out.getvalue()
